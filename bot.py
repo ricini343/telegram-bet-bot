@@ -25,7 +25,7 @@ def analyze_screenshot(image_base64):
         "content-type": "application/json"
     }
     payload = {
-        "model": "claude-3-5-sonnet-20240620",
+        "model": "claude-3-sonnet-20240229",
         "max_tokens": 1024,
         "messages": [{
             "role": "user",
