@@ -1,21 +1,45 @@
 import logging
 import os
+import json
+import re
+import base64
+import io
+import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters, ContextTypes
 from telegram.constants import ChatAction
 from PIL import Image
-import io
-import json
-import re
-from anthropic import Anthropic
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-anthropic = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 AWAITING_PERCENTAGE = 1
 pending_bets = {}
+
+def analyze_screenshot(image_base64):
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
+    payload = {
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": image_base64}
+            }, {
+                "type": "text",
+                "text": "Analyze this betting screenshot. Extract ALL games/bets. Return ONLY valid JSON: {\"sport\": \"Football/Basketball/Tennis\", \"games\": [{\"match\": \"Team A vs Team B\", \"bet\": \"description\"}]}"
+            }]
+        }]
+    }
+    response = requests.post(url, json=payload, headers=headers)
+    return response.json()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("🎯 Bet Parlay Analyzer Bot\n\nSend me a screenshot of your bet!")
@@ -31,32 +55,21 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         photo_data = await photo_file.download_as_bytearray()
         image = Image.open(io.BytesIO(photo_data))
         
-        logger.info("Analyzing screenshot with Claude Vision...")
-        
-        import base64
         buffered = io.BytesIO()
         image.save(buffered, format="PNG")
         img_base64 = base64.b64encode(buffered.getvalue()).decode()
         
-        message = anthropic.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=1024,
-            messages=[{
-                "role": "user",
-                "content": [{
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": img_base64}
-                }, {
-                    "type": "text",
-                    "text": "Analyze this betting screenshot and extract ALL games/bets. Return ONLY valid JSON: {\"sport\": \"Football/Basketball/Tennis\", \"games\": [{\"match\": \"Team A vs Team B\", \"bet\": \"description\"}]}"
-                }]
-            }]
-        )
+        logger.info("Analyzing with Claude...")
+        response = analyze_screenshot(img_base64)
         
-        response_text = message.content[0].text.strip()
+        if "error" in response:
+            await update.message.reply_text(f"API Error: {response['error'].get('message', 'Unknown')}")
+            return
+        
+        response_text = response["content"][0]["text"].strip()
         try:
             bet_data = json.loads(response_text)
-        except json.JSONDecodeError:
+        except:
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             bet_data = json.loads(json_match.group()) if json_match else {"sport": "Unknown", "games": []}
         
@@ -125,7 +138,7 @@ async def handle_percentage(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("Please enter a valid percentage (e.g., 5 or 5.5)")
         return AWAITING_PERCENTAGE
     except Exception as e:
-        logger.error(f"Error posting: {e}")
+        logger.error(f"Error: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
         return ConversationHandler.END
 
@@ -150,7 +163,7 @@ def main():
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
-    logger.info("Bot started. Polling for messages...")
+    logger.info("Bot started...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
