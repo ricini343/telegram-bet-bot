@@ -25,7 +25,7 @@ def analyze_screenshot(image_base64):
         "content-type": "application/json"
     }
     payload = {
-        "model": "claude-3-opus-20240229",
+        "model": "claude-3-5-sonnet-20241022",
         "max_tokens": 1024,
         "messages": [{
             "role": "user",
@@ -66,6 +66,10 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             error_msg = response['error'].get('message', 'Unknown error')
             logger.error(f"API Error: {error_msg}")
             await update.message.reply_text(f"❌ API Error: {error_msg}")
+            return
+        
+        if "content" not in response or not response["content"]:
+            await update.message.reply_text("❌ No response from API")
             return
         
         response_text = response["content"][0]["text"].strip()
